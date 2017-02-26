@@ -1,0 +1,8 @@
+
+[Unit]
+Before=dnsmasq.service
+
+[Service]
+ExecStart=
+ExecStart=/usr/bin/docker daemon -H fd:// -H tcp://<%= VM_IP %>:2375
+ExecStartPost=/sbin/iptables -P FORWARD ACCEPT

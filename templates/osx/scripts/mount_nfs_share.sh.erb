@@ -1,0 +1,17 @@
+echo "** Adding resolver directory if it does not exist"
+[[ ! -d /etc/resolver ]] && sudo mkdir -p /etc/resolver
+
+echo "** Adding/Replacing *.docker resolver (replacing to ensure OSX sees the change)"
+[[ -f /etc/resolver/docker ]] && sudo rm -f /etc/resolver/docker
+sudo bash -c "printf '%s\n%s\n' 'nameserver <%= VM_IP %>' 'port <%= DOCKER_DNS_PORT %>' > /etc/resolver/docker"
+
+echo "** Adding routes"
+sudo route -n delete 172.17.0.0/16 <%= VM_IP %>
+sudo route -n add 172.17.0.0/16 <%= VM_IP %>
+sudo route -n delete 172.17.0.1/32 <%= VM_IP %>
+sudo route -n add 172.17.0.1/32 <%= VM_IP %>
+
+echo "** Mounting ubuntu NFS /home/<%= USERNAME %>/vagrant_projects to ~/vagrant_projects"
+[[ ! -d <%= HOME %>/vagrant_projects ]] && mkdir <%= HOME %>/vagrant_projects
+sudo mount -t nfs -o rw,bg,hard,nolocks,intr,sync <%= VM_IP %>:/home/<%= USERNAME %>/vagrant_projects <%= HOME %>/vagrant_projects
+

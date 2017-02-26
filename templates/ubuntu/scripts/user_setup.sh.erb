@@ -1,0 +1,17 @@
+
+apt-get install -y $(basename <%= SHELL %>)
+adduser --force-badname --uid 9999 --shell=/bin/$(basename <%= SHELL %>) --disabled-password --gecos "<%= USERNAME %>" <%= USERNAME %>
+usermod -G docker,admin,sudo,staff <%= USERNAME %>
+echo "<%= USERNAME %> ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/<%= USERNAME %>
+mkdir ~<%= USERNAME %>/.ssh
+chmod 0700 ~<%= USERNAME %>/.ssh
+mv /tmp/id_rsa* ~<%= USERNAME %>/.ssh/
+mv /tmp/ssh_config ~<%= USERNAME %>/.ssh/config
+mv /tmp/extras.sh /tmp/localextras.sh ~<%= USERNAME %>/
+mkdir ~<%= USERNAME %>/vagrant_projects
+echo "File from dev-on-ub" > ~<%= USERNAME %>/vagrant_projects/README.txt
+
+mkdir ~<%= USERNAME %>/consul-registrator-setup/
+mv /tmp/consul.json /tmp/docker-compose.yml ~<%= USERNAME %>/consul-registrator-setup/
+
+chown -R <%= USERNAME %>: ~<%= USERNAME %>
