@@ -11,10 +11,12 @@ VM_GATEWAY_IP = "192.168.90.1"
 # This value should match the port that maps to consul 8600 in the docker-compose
 DOCKER_DNS_PORT = 8600
 
+DOCKER_COMPOSE_VERSION = "1.11.2"
+
 # This var will be used to configure the user created in the vagrant, and
 # should match the user running the vagrant box
 USERNAME = ENV.fetch('USER')
-SHELL = ENV.fetch('SHELL')
+SHELL = File.basename(ENV.fetch('SHELL'))
 
 require 'open3'
 def syscall(log, cmd)
@@ -113,56 +115,9 @@ Vagrant.configure("2") do |config|
     # Set the timesync threshold to 10 seconds, instead of the default 20 minutes.
   end
 
-  config.vm.provision "shell", inline: <<-SHELL
-    update-locale LANG="en_US.UTF-8" LC_COLLATE="en_US.UTF-8" \
-      LC_CTYPE="en_US.UTF-8" LC_MESSAGES="en_US.UTF-8" \
-      LC_MONETARY="en_US.UTF-8" LC_NUMERIC="en_US.UTF-8" LC_TIME="en_US.UTF-8"
-
-    apt-get update -y
-    apt-get install -y ntp git vim curl sqlite network-manager dnsmasq nfs-kernel-server debconf-utils
-    apt-get install -y apt-transport-https ca-certificates
-
-    service ntp restart
-
-    echo 'deb https://apt.dockerproject.org/repo ubuntu-xenial main' > /etc/apt/sources.list.d/docker.list
-    apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 58118E89F3A912897C070ADBF76221572C52609D
-    apt-key adv --keyserver hkp://p80.pool.sks-keyservers.net:80 --recv-keys 58118E89F3A912897C070ADBF76221572C52609D
-    apt-get purge lxc-docker
-    apt-get update -y
-    apt-cache policy docker-engine
-    apt-get install -y linux-image-extra-$(uname -r) linux-image-extra-virtual
-    apt-get install -y docker-engine=1.12.6-0~ubuntu-xenial
-
-    curl -L https://github.com/docker/compose/releases/download/1.8.0/docker-compose-`uname -s`-`uname -m` > /usr/local/bin/docker-compose
-    chmod +x /usr/local/bin/docker-compose
-
-    echo "creating docker group and user"
-    groupadd -f docker
-    usermod -aG docker vagrant
-
-    echo 'GRUB_CMDLINE_LINUX="cgroup_enable=memory swapaccount=1"' >> /etc/default/grub
-    service docker start
-
-    echo "** Setting up systemd dropin config for docker daemon"
-    mkdir /etc/systemd/system/docker.service.d
-    pushd /etc/systemd/system/docker.service.d
-
-    echo "[Unit]" > dev-on-docker-tcp.conf
-    echo "Before=dnsmasq.service" >> dev-on-docker-tcp.conf
-    echo "[Service]" >> dev-on-docker-tcp.conf
-    echo "ExecStart=" >> dev-on-docker-tcp.conf
-    echo "ExecStart=/usr/bin/docker daemon -H fd:// -H tcp://#{VM_IP}:2375" >> dev-on-docker-tcp.conf
-    echo "ExecStartPost=/sbin/iptables -P FORWARD ACCEPT" >>  dev-on-docker-tcp.conf
-
-    popd
-    systemctl daemon-reload
-
-    echo "** Adding ubuntu user to admin group"
-    groupadd -f admin
-    usermod -aG admin vagrant
-  SHELL
-
   [
+    { s: "./scripts/base_setup.sh", d: "/tmp/base_setup.sh" },
+    { s: "./scripts/user_setup.sh", d: "/tmp/user_setup.sh" },
     { s: "~#{USERNAME}/.ssh/id_rsa", d: "/tmp/id_rsa" },
     { s: "~#{USERNAME}/.ssh/id_rsa.pub", d: "/tmp/id_rsa.pub" },
     { s: "~#{USERNAME}/.ssh/config", d: "/tmp/ssh_config" },
@@ -175,50 +130,14 @@ Vagrant.configure("2") do |config|
   end
 
   config.vm.provision "shell", inline: <<-SHELL
-    apt-get install -y zsh
-    adduser --force-badname --uid 9999 --shell=/bin/$(basename #{SHELL}) --disabled-password --gecos "#{USERNAME}" #{USERNAME}
-    usermod -G docker,admin,sudo,staff #{USERNAME}
-    echo "#{USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/#{USERNAME}
-    mkdir ~#{USERNAME}/.ssh
-    chmod 0700 ~#{USERNAME}/.ssh
-    mv /tmp/id_rsa* ~#{USERNAME}/.ssh/
-    mv /tmp/ssh_config ~#{USERNAME}/.ssh/config
-    mv /tmp/extras.sh /tmp/localextras.sh ~#{USERNAME}/
-    mkdir ~#{USERNAME}/vagrant_projects
-    echo "File from dev-on-ub" > ~#{USERNAME}/vagrant_projects/README.txt
-
-    mkdir ~#{USERNAME}/consul-registrator-setup/
-    mv /tmp/consul.json /tmp/docker-compose.yml ~#{USERNAME}/consul-registrator-setup/
-
-    chown -R #{USERNAME}: ~#{USERNAME}
-
-    apt-get install -y nfs-kernel-server
-    echo "/home/#{USERNAME}/vagrant_projects #{VM_GATEWAY_IP}(rw,sync,no_subtree_check,insecure,anonuid=$(id -u #{USERNAME}),anongid=$(id -g #{USERNAME}),all_squash)" >> /etc/exports
-    service nfs-kernel-server start
-    exportfs -a
-
-    echo "** Modifying NetworkManager and dnsmasq to support routing to service.docker"
-    sed -e 's/.*bind-interfaces/# bind-interfaces/' -i /etc/dnsmasq.d/network-manager
-    sed -e 's/.*dns=dnsmasq/# dns=dnsmasq/' -i /etc/NetworkManager/NetworkManager.conf
-
-    echo "listen-address=127.0.0.1" > /etc/dnsmasq.d/10-docker
-    echo "listen-address=172.17.0.1" >> /etc/dnsmasq.d/10-docker
-    echo "listen-address=#{VM_IP}" >> /etc/dnsmasq.d/10-docker
-    echo "server=/.service.docker/127.0.0.1#8600" >> /etc/dnsmasq.d/10-docker
-
-    service network-manager restart
-    service dnsmasq restart
-
-    sudo -u #{USERNAME} -i bash extras.sh
-
-    echo "** Cleaning up old packaged with 'apt autoremove' ... "
-    apt autoremove -y
-
-    echo "** Linking /Users -> /home in the guest. Supports volume mounting in docker-compose"
-    [[ ! -L /Users ]] && ln -s /home /Users
-
-    echo "** Run 'export DOCKER_HOST="tcp://#{VM_IP}:2375"' on this host to interact with docker in the vagrant guest"
-    echo "** Note that some things may not work."
+    sed -e 's/DEVWDOC_USERNAME/#{USERNAME}/' \
+        -e 's/DEVWDOC_VM_IP/#{VM_IP}/' \
+        -e 's/DEVWDOC_VM_GATEWAY_IP/#{VM_GATEWAY_IP}/' \
+        -e 's/DEVWDOC_DOCKER_COMPOSE_VERSION/#{DOCKER_COMPOSE_VERSION}/' \
+        -e 's/DEVWDOC_SHELL/#{SHELL}/' \
+        -i /tmp/base_setup.sh /tmp/user_setup.sh
+    bash /tmp/base_setup.sh
+    bash /tmp/user_setup.sh
   SHELL
 end
 
